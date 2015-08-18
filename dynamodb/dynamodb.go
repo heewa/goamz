@@ -6,6 +6,7 @@ import (
 	"github.com/goamz/goamz/aws"
 	"io/ioutil"
 	"log"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +15,8 @@ import (
 type Server struct {
 	Auth   aws.Auth
 	Region aws.Region
+
+	HttpClient *http.Client
 }
 
 /*
@@ -72,6 +75,8 @@ func buildError(r *http.Response, jsonBody []byte) error {
 	return &ddbError
 }
 
+var defaultHttpClient *http.Client
+
 func (s *Server) queryServer(target string, query *Query) ([]byte, error) {
 	data := strings.NewReader(query.String())
 	hreq, err := http.NewRequest("POST", s.Region.DynamoDBEndpoint+"/", data)
@@ -91,7 +96,25 @@ func (s *Server) queryServer(target string, query *Query) ([]byte, error) {
 	signer := aws.NewV4Signer(s.Auth, "dynamodb", s.Region)
 	signer.Sign(hreq)
 
-	resp, err := http.DefaultClient.Do(hreq)
+	httpClient := s.HttpClient
+	if httpClient == nil {
+		if defaultHttpClient == nil {
+			defaultHttpClient = &http.Client{
+				Transport: &http.Transport{
+					Proxy: http.ProxyFromEnvironment,
+					Dial: (&net.Dialer{
+						Timeout:   30 * time.Second,
+						KeepAlive: 30 * time.Second,
+					}).Dial,
+					TLSHandshakeTimeout: 10 * time.Second,
+				},
+			}
+		}
+
+		httpClient = defaultHttpClient
+	}
+
+	resp, err := httpClient.Do(hreq)
 
 	if err != nil {
 		log.Printf("Error calling Amazon")
